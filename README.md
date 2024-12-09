@@ -30,15 +30,16 @@ Lenovo ThinkPad P16 Gen2
    - Use GParted to create new partition(s) on the RAID array with your prefered filesystem.
    - Create separate partitions for `/boot`, `/home`, `/var` etc. if desired
 
-4. **Mount Partitions**   ```bash
-   sudo mount /dev/md126p5 /mnt
+4. **Mount Partitions**   
+``` sudo mount /dev/md126p5 /mnt
 
    sudo mkdir -p /mnt/boot/efi
 
    sudo mount /dev/md126p1 /mnt/boot/efi   ```
 
-5. **Install Base System**   ```bash
-   sudo debootstrap --arch amd64 plucky /mnt http://archive.ubuntu.com/ubuntu/   ```
+5. **Install Base System**   
+```   sudo debootstrap --arch amd64 plucky /mnt http://archive.ubuntu.com/ubuntu/   ```
+
    Pick your version:
    - 25.04: plucky
    - 24.10: oracular
@@ -47,15 +48,15 @@ Lenovo ThinkPad P16 Gen2
    - 20.04: focal
    - 18.04: bionic
 
-6. **Mount Essential Filesystems**   ```bash
-   sudo mount --bind /dev /mnt/dev
+6. **Mount Essential Filesystems**   
+```   sudo mount --bind /dev /mnt/dev
 
    sudo mount --bind /proc /mnt/proc
 
    sudo mount --bind /sys /mnt/sys   ```
 
-7. **Enter chroot**   ```bash
-   cd /mnt
+7. **Enter chroot**   
+```   cd /mnt
    sudo chroot /mnt /bin/bash   ```
 
 8. **Configure Package Sources**   ```bash
@@ -65,49 +66,53 @@ Lenovo ThinkPad P16 Gen2
    deb http://security.ubuntu.com/ubuntu/ plucky-security main restricted universe multiverse
    EOF   ```
 
-9. **Install Essential Packages**   ```bash
-   apt update
+9. **Install Essential Packages**   
+```   apt update
    apt install linux-image-generic mdadm grub-efi-amd64 ubuntu-desktop network-manager   ```
 
-10. **Configure System**    ```bash
-    # Set hostname
-    echo "your-hostname" > /etc/hostname
+10. **Configure System**
+    # Set hostname    
+```   echo "your-hostname" > /etc/hostname   ```
 
     # Set up fstab
-    echo "UUID=$(blkid -s UUID -o value /dev/md126p5) /               ext4    errors=remount-ro 0       1" >> /etc/fstab
+```    echo "UUID=$(blkid -s UUID -o value /dev/md126p5) /               ext4    errors=remount-ro 0       1" >> /etc/fstab
+
     echo "UUID=$(blkid -s UUID -o value /dev/md126p1) /boot/efi       vfat    umask=0077      0       1" >> /etc/fstab    ```
 
-11. **Configure GRUB**    ```bash
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu
+11. **Configure GRUB**    
+```   grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu
+
     echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub
+
     echo 'GRUB_TIMEOUT=5' >> /etc/default/grub
+
     update-grub    ```
 
-12. **Finalize Installation**    ```bash
+12. **Finalize Installation**    
     # Update initramfs
-    update-initramfs -u -k all
+```   update-initramfs -u -k all   ```
 
     # Enable NetworkManager
-    systemctl enable NetworkManager
+```   systemctl enable NetworkManager   ```
 
     # Exit chroot
-    exit    ```
+```   exit   ```
 
-13. **Cleanup and Reboot**    ```bash
-    sudo umount /mnt/dev
+13. **Cleanup and Reboot**
+```    sudo umount /mnt/dev   ```
 
-    sudo umount /mnt/proc
+```    sudo umount /mnt/proc   ```
 
-    sudo umount /mnt/sys
+```    sudo umount /mnt/sys   ```
 
-    sudo umount /mnt/boot/efi
+```    sudo umount /mnt/boot/efi   ```
 
-    sudo umount /mnt
-    
-    sudo reboot    ```
+```    sudo umount /mnt   ```
+
+```    sudo reboot   ```
 
 You will need to do some manual configurations in Ubuntu after like keyboard layout, timezone, etc.
-You should now have a working Ubuntu installation on your RAID array.
+But you should now have a working Ubuntu installation on your Intel RST RAID array.
 
 ## Notes
 If grub dont show you boot options, you can always just press Enter and select F12 when booting your system to get available EFI boot options and select Windows etc there.

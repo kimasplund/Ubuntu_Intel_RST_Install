@@ -34,7 +34,7 @@ This guide will install Ubuntu to the RAID array and then install the bootloader
 ---
 
 ### 3. Create Partitions
-- Use GParted to create new partition(s) on the RAID array with your preferred filesystem.
+- Use GParted to create new `/` partition(s) on the RAID array with your preferred filesystem. (just make sure you install the tools for it. Ubintu happily boots from ZFS and Btrfs also)
 - Create separate partitions for `/boot`, `/home`, `/var`, etc., if desired.
 
 ---

@@ -180,3 +180,6 @@ sudo reboot
 Buy me a coffee or leave a tip: [Buy me a coffee](https://buy.stripe.com/3cs8xe92bdRcbBu3ch)
 
 Open an issue if you want to add/change something to this guide.
+
+
+PS: if you break your computer i take no responsibility. Always good to have a current backup or cloud backup of your data.

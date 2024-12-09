@@ -160,6 +160,16 @@ If GRUB doesn't show you boot options, you can always press **Enter** and select
 
 Or install the [rEFInd Boot Manager](https://www.rodsbooks.com/refind/) for a nice GUI to select your boot options.
 
+But in short, you can install rEFInd with the following commands:
+```bash
+sudo apt-add-repository ppa:rodsmith/refind
+sudo apt update
+sudo apt install refind
+sudo refind-install
+sudo refind-mkdefault
+sudo reboot
+```
+
 ---
 
 ## Author

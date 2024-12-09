@@ -32,12 +32,14 @@ Lenovo ThinkPad P16 Gen2
 
 4. **Mount Partitions**   ```bash
    sudo mount /dev/md126p5 /mnt
+
    sudo mkdir -p /mnt/boot/efi
+
    sudo mount /dev/md126p1 /mnt/boot/efi   ```
 
 5. **Install Base System**   ```bash
    sudo debootstrap --arch amd64 plucky /mnt http://archive.ubuntu.com/ubuntu/   ```
-   Available versions:
+   Pick your version:
    - 25.04: plucky
    - 24.10: oracular
    - 24.04: noble
@@ -47,7 +49,9 @@ Lenovo ThinkPad P16 Gen2
 
 6. **Mount Essential Filesystems**   ```bash
    sudo mount --bind /dev /mnt/dev
+
    sudo mount --bind /proc /mnt/proc
+
    sudo mount --bind /sys /mnt/sys   ```
 
 7. **Enter chroot**   ```bash
@@ -91,10 +95,15 @@ Lenovo ThinkPad P16 Gen2
 
 13. **Cleanup and Reboot**    ```bash
     sudo umount /mnt/dev
+
     sudo umount /mnt/proc
+
     sudo umount /mnt/sys
+
     sudo umount /mnt/boot/efi
+
     sudo umount /mnt
+    
     sudo reboot    ```
 
 You will need to do some manual configurations in Ubuntu after like keyboard layout, timezone, etc.

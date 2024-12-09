@@ -76,6 +76,7 @@ Lenovo ThinkPad P16 Gen2
 11. **Configure GRUB**    ```bash
     grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu
     echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub
+    echo 'GRUB_TIMEOUT=5' >> /etc/default/grub
     update-grub    ```
 
 12. **Finalize Installation**    ```bash
@@ -105,3 +106,9 @@ If grub dont show you boot options, you can always just press Enter and select F
 Or install The rEFInd Boot Manager to get a nice GUI for selecting your boot options.
 
 https://www.rodsbooks.com/refind/getting-started.html
+
+## Author
+Kim Asplund  
+https://asplund.kim
+
+open a issue if you want to add/change something to this guide.

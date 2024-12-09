@@ -158,12 +158,15 @@ You will need to do some manual configurations in Ubuntu after, like keyboard la
 ## Notes
 If GRUB doesn't show you boot options, you can always press **Enter** and select **F12** when booting your system to get available EFI boot options and select Windows or other OS options there.
 
-Or install the [rEFInd Boot Manager](https://www.rodsbooks.com/refind/getting-started.html) for a nice GUI to select your boot options.
+Or install the [rEFInd Boot Manager](https://www.rodsbooks.com/refind/) for a nice GUI to select your boot options.
 
 ---
 
 ## Author
 **Kim Asplund**  
 [Website](https://asplund.kim)  
+[GitHub](https://github.com/asplundkim)  
+
+Buy me a coffee or leave a tip: [Buy me a coffee](https://buy.stripe.com/3cs8xe92bdRcbBu3ch)
 
 Open an issue if you want to add/change something to this guide.

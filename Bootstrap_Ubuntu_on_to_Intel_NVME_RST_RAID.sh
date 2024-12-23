@@ -283,6 +283,55 @@ detect_system_config() {
     fi
 }
 
+# Add after detect_system_config function
+
+detect_hardware() {
+    log_progress "Detecting hardware configuration..."
+    
+    # CPU Detection
+    if grep -q "Intel" /proc/cpuinfo; then
+        CPU_VENDOR="intel"
+        log_progress "Detected Intel CPU"
+    elif grep -q "AMD" /proc/cpuinfo; then
+        CPU_VENDOR="amd"
+        log_progress "Detected AMD CPU"
+    fi
+    
+    # GPU Detection (already have NVIDIA_DETECTED)
+    if lspci | grep -i "Intel.*Graphics" > /dev/null; then
+        INTEL_GPU=1
+        log_progress "Detected Intel GPU"
+    fi
+    if lspci | grep -i "AMD.*Graphics\|ATI.*Graphics" > /dev/null; then
+        AMD_GPU=1
+        log_progress "Detected AMD GPU"
+    fi
+    
+    # Laptop Detection
+    if [ -d "/sys/class/power_supply" ] && ls /sys/class/power_supply/BAT* >/dev/null 2>&1; then
+        IS_LAPTOP=1
+        log_progress "Detected laptop system"
+    fi
+    
+    # Wireless Detection
+    if lspci | grep -i "Network\|Wireless" | grep -i "Intel" > /dev/null; then
+        INTEL_WIFI=1
+        log_progress "Detected Intel wireless"
+    elif lspci | grep -i "Network\|Wireless" | grep -i "Broadcom" > /dev/null; then
+        BROADCOM_WIFI=1
+        log_progress "Detected Broadcom wireless"
+    fi
+    
+    # Save hardware detection results
+    mkdir -p /mnt/hardware_info
+    echo "$CPU_VENDOR" > /mnt/hardware_info/cpu_vendor
+    [ "$INTEL_GPU" = "1" ] && echo "1" > /mnt/hardware_info/intel_gpu
+    [ "$AMD_GPU" = "1" ] && echo "1" > /mnt/hardware_info/amd_gpu
+    [ "$IS_LAPTOP" = "1" ] && echo "1" > /mnt/hardware_info/is_laptop
+    [ "$INTEL_WIFI" = "1" ] && echo "1" > /mnt/hardware_info/intel_wifi
+    [ "$BROADCOM_WIFI" = "1" ] && echo "1" > /mnt/hardware_info/broadcom_wifi
+}
+
 # User Configuration Section
 get_user_preferences() {
     log_progress "Configuring user preferences..."
@@ -691,9 +740,80 @@ DEBIAN_FRONTEND=noninteractive apt install -y \
     $([ "$INSTALL_NVIDIA" = "Y" ] && [ "$INSTALL_PRIME" = "Y" ] && \
       echo "nvidia-driver-535 nvidia-prime nvidia-settings prime-select") \
     ubuntu-restricted-extras \
-    firmware-sof-signed \
-    intel-microcode \
-    amd64-microcode
+    firmware-sof-signed
+
+# Load hardware detection results
+CPU_VENDOR=$(cat /hardware_info/cpu_vendor)
+INTEL_GPU=$(cat /hardware_info/intel_gpu)
+AMD_GPU=$(cat /hardware_info/amd_gpu)
+IS_LAPTOP=$(cat /hardware_info/is_laptop)
+INTEL_WIFI=$(cat /hardware_info/intel_wifi)
+BROADCOM_WIFI=$(cat /hardware_info/broadcom_wifi)
+
+# Install hardware-specific packages
+echo "Installing hardware-specific packages..."
+
+# CPU-specific packages
+case "$CPU_VENDOR" in
+    "intel")
+        DEBIAN_FRONTEND=noninteractive apt install -y \
+            intel-microcode \
+            thermald \
+            intel-gpu-tools
+        ;;
+    "amd")
+        DEBIAN_FRONTEND=noninteractive apt install -y \
+            amd64-microcode \
+            ryzen-controller
+        ;;
+esac
+
+# GPU-specific packages
+if [ "$INTEL_GPU" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        i965-va-driver-shaders \
+        intel-media-va-driver-non-free \
+        vainfo
+fi
+
+if [ "$AMD_GPU" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        mesa-vulkan-drivers \
+        libvulkan1 \
+        vulkan-tools \
+        radeontop
+fi
+
+# Laptop-specific packages
+if [ "$IS_LAPTOP" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        tlp \
+        tlp-rdw \
+        powertop \
+        acpi \
+        acpi-call-dkms \
+        laptop-mode-tools
+    
+    # Enable laptop power management services
+    systemctl enable tlp
+    systemctl enable laptop-mode
+fi
+
+# Wireless-specific packages
+if [ "$INTEL_WIFI" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        iwlwifi-firmware \
+        firmware-iwlwifi
+fi
+
+if [ "$BROADCOM_WIFI" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        broadcom-sta-dkms \
+        broadcom-sta-common
+fi
+
+# Remove hardware detection files
+rm -rf /hardware_info
 
 # Configure system
 configure_system
@@ -882,6 +1002,9 @@ main() {
     
     # Detect system configuration
     detect_system_config
+    
+    # Detect hardware
+    detect_hardware
     
     # Get user preferences
     get_user_preferences

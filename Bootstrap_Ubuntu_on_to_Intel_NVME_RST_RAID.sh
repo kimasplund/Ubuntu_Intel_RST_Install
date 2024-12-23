@@ -26,6 +26,75 @@ log_progress() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
 }
 
+# Helper function to verify mount status
+verify_mount() {
+    local mount_point="$1"
+    local expected_device="$2"
+    local retries=3
+    local retry=0
+    
+    while [ $retry -lt $retries ]; do
+        if ! mountpoint -q "$mount_point"; then
+            log_progress "Mount point $mount_point is not mounted"
+            return 1
+        fi
+        
+        if [ -n "$expected_device" ]; then
+            local mounted_device=$(findmnt -n -o SOURCE "$mount_point" | sed 's/\[.*\]$//')
+            if ! echo "$mounted_device" | grep -q "^$expected_device"; then
+                log_progress "Wrong device mounted at $mount_point (expected: $expected_device, got: $mounted_device)"
+                return 1
+            fi
+        fi
+        
+        # Skip write test for special filesystems
+        local fs_type=$(findmnt -n -o FSTYPE "$mount_point")
+        case "$fs_type" in
+            "proc"|"sysfs"|"devpts"|"tmpfs"|"devtmpfs")
+                log_progress "Skipping write test for special filesystem $fs_type at $mount_point"
+                return 0
+                ;;
+        esac
+        
+        # Check if mount point is accessible
+        if ! touch "$mount_point/.mount_test" 2>/dev/null; then
+            log_progress "Mount point $mount_point is not writable"
+            retry=$((retry + 1))
+            sleep 1
+            continue
+        fi
+        rm -f "$mount_point/.mount_test"
+        return 0
+    done
+    
+    return 1
+}
+
+# Helper function for force cleanup
+force_cleanup() {
+    log_progress "Performing force cleanup..."
+    
+    # Kill all processes using /mnt
+    log_progress "Terminating all processes using /mnt..."
+    fuser -k -9 /mnt/* /mnt 2>/dev/null || true
+    sleep 2
+    
+    # Force unmount everything
+    log_progress "Force unmounting all mountpoints..."
+    for mp in $(mount | grep /mnt | awk '{print $3}' | sort -r); do
+        umount -f "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done
+    
+    # Final verification
+    if mount | grep -q "/mnt"; then
+        log_progress "Warning: Some mounts could not be cleaned up:"
+        mount | grep "/mnt"
+        return 1
+    fi
+    
+    return 0
+}
+
 # Check and cleanup previous mounts
 cleanup_previous_mounts() {
     log_progress "Checking for leftover mounts from previous attempts..."
@@ -99,13 +168,11 @@ cleanup() {
     
     log_progress "Cleanup triggered on line $error_line (exit code: $exit_code)"
     
-    # Unmount everything in reverse order
-    for mount in "/mnt/dev" "/mnt/proc" "/mnt/sys" "/mnt/boot/efi" "/mnt/home" "/mnt/var" "/mnt/tmp" "/mnt/.snapshots" "/mnt"; do
-        if mountpoint -q "$mount" 2>/dev/null; then
-            log_progress "Unmounting $mount..."
-            umount "$mount" || log_progress "Failed to unmount $mount"
-        fi
-    done
+    # Try normal cleanup first
+    cleanup_previous_mounts || {
+        log_progress "Normal cleanup failed, attempting force cleanup..."
+        force_cleanup
+    }
     
     if [ $exit_code -ne 0 ]; then
         log_progress "Installation failed. Please check the logs."
@@ -113,6 +180,10 @@ cleanup() {
     
     exit $exit_code
 }
+
+# Set up signal handlers
+trap 'cleanup ${LINENO}' ERR
+trap 'log_progress "Received interrupt signal..."; cleanup ${LINENO}' INT TERM
 
 # Enhanced error handling
 trap 'cleanup ${LINENO}' ERR
@@ -305,41 +376,38 @@ format_root_partition() {
     log_progress "Formatting root partition as $FS_TYPE..."
     case "$FS_TYPE" in
         "btrfs")
-            # Common options for all devices
-            local BTRFS_OPTS=(
-                -f                          # Force overwrite
-                -L "Ubuntu_${UBUNTU_VERSION^}"  # Label
-                --csum xxhash              # Use xxhash for checksums (faster than crc32c)
-                -O no-holes                # More efficient space handling
-                -O free-space-tree         # Better free space tracking
-                -O extref                  # Extended references for better performance
-                -O skinny-metadata         # Reduced metadata consumption
-            )
+            # First, try to clean up any existing btrfs filesystem
+            if btrfs device scan "$ROOT_PARTITION" >/dev/null 2>&1; then
+                log_progress "Cleaning up existing btrfs filesystem..."
+                mount -o ro "$ROOT_PARTITION" /mnt 2>/dev/null || true
+                for subvol in @ @home @var @tmp @snapshots; do
+                    if btrfs subvolume list /mnt | grep -q "$subvol"; then
+                        btrfs subvolume delete "/mnt/$subvol" 2>/dev/null || true
+                    fi
+                done
+                umount /mnt 2>/dev/null || true
+            fi
             
-            case "$MEDIA_TYPE" in
-                "nvme"|"ssd")
-                    # NVMe/SSD specific options
-                    BTRFS_OPTS+=(
-                        -n 32k              # Node size optimized for SSDs
-                        -m dup              # Metadata duplication for safety
-                        -d single           # Single data for space efficiency
-                        --features "no-holes,free-space-tree"
-                        -K                  # Enable no-holes feature
-                        -A 4k               # Align at 4K for NVMe
-                    )
-                    ;;
-                *)
-                    # HDD specific options
-                    BTRFS_OPTS+=(
-                        -m dup              # Metadata duplication for safety
-                        -d single           # Single data for space efficiency
-                        --features "no-holes,free-space-tree"
-                    )
-                    ;;
-            esac
-            
-            # Execute mkfs.btrfs with all options
-            mkfs.btrfs "${BTRFS_OPTS[@]}" "$ROOT_PARTITION"
+            log_progress "Creating new btrfs filesystem..."
+            if [ "$MEDIA_TYPE" = "nvme" ] || [ "$MEDIA_TYPE" = "ssd" ]; then
+                # NVMe/SSD specific options
+                mkfs.btrfs -f -L "Ubuntu_${UBUNTU_VERSION^}" \
+                    --checksum xxhash \
+                    --nodesize 32k \
+                    --metadata dup \
+                    --data single \
+                    -O no-holes,free-space-tree,extref,skinny-metadata \
+                    --nodiscard \
+                    "$ROOT_PARTITION"
+            else
+                # HDD specific options
+                mkfs.btrfs -f -L "Ubuntu_${UBUNTU_VERSION^}" \
+                    --checksum xxhash \
+                    --metadata dup \
+                    --data single \
+                    -O no-holes,free-space-tree,extref,skinny-metadata \
+                    "$ROOT_PARTITION"
+            fi
             ;;
         "ext4")
             mkfs.ext4 -F -L Ubuntu_${UBUNTU_VERSION^} "$ROOT_PARTITION"
@@ -365,26 +433,42 @@ mount_root_partition() {
             MOUNT_OPTIONS="defaults,noatime,space_cache=v2,ssd,discard=async,compress=zstd:1"
             
             # Mount for subvolume creation if formatting
-            mount -o "$MOUNT_OPTIONS" "$ROOT_PARTITION" /mnt
+            if ! mount -o "$MOUNT_OPTIONS" "$ROOT_PARTITION" /mnt; then
+                log_progress "Failed to mount root partition"
+                return 1
+            fi
             
             if [[ "$FORMAT_PARTITION" =~ ^[Yy]$ ]]; then
                 log_progress "Creating btrfs subvolume layout..."
-                btrfs subvolume create /mnt/@
-                btrfs subvolume create /mnt/@home
-                btrfs subvolume create /mnt/@var
-                btrfs subvolume create /mnt/@tmp
-                btrfs subvolume create /mnt/@snapshots
+                # First check and delete any existing subvolumes
+                for subvol in @ @home @var @tmp @snapshots; do
+                    if btrfs subvolume list /mnt | grep -q "$subvol"; then
+                        log_progress "Deleting existing subvolume $subvol..."
+                        btrfs subvolume delete "/mnt/$subvol" || {
+                            log_progress "Failed to delete subvolume $subvol"
+                            return 1
+                        }
+                    fi
+                done
+                
+                # Create new subvolumes
+                for subvol in @ @home @var @tmp @snapshots; do
+                    btrfs subvolume create "/mnt/$subvol" || {
+                        log_progress "Failed to create subvolume $subvol"
+                        return 1
+                    }
+                done
                 
                 # Unmount and remount with subvolumes
                 umount /mnt
                 
                 # Mount subvolumes
-                mount -o "$MOUNT_OPTIONS,subvol=@" "$ROOT_PARTITION" /mnt
+                mount -o "$MOUNT_OPTIONS,subvol=@" "$ROOT_PARTITION" /mnt || return 1
                 mkdir -p /mnt/{home,var,tmp,.snapshots,boot/efi}
-                mount -o "$MOUNT_OPTIONS,subvol=@home" "$ROOT_PARTITION" /mnt/home
-                mount -o "$MOUNT_OPTIONS,subvol=@var" "$ROOT_PARTITION" /mnt/var
-                mount -o "$MOUNT_OPTIONS,subvol=@tmp" "$ROOT_PARTITION" /mnt/tmp
-                mount -o "$MOUNT_OPTIONS,subvol=@snapshots" "$ROOT_PARTITION" /mnt/.snapshots
+                mount -o "$MOUNT_OPTIONS,subvol=@home" "$ROOT_PARTITION" /mnt/home || return 1
+                mount -o "$MOUNT_OPTIONS,subvol=@var" "$ROOT_PARTITION" /mnt/var || return 1
+                mount -o "$MOUNT_OPTIONS,subvol=@tmp" "$ROOT_PARTITION" /mnt/tmp || return 1
+                mount -o "$MOUNT_OPTIONS,subvol=@snapshots" "$ROOT_PARTITION" /mnt/.snapshots || return 1
             else
                 # If not formatting, still ensure the mount points exist
                 mkdir -p /mnt/{home,var,tmp,.snapshots,boot/efi}
@@ -393,10 +477,11 @@ mount_root_partition() {
         *)
             # Set mount options for NVMe RAID
             MOUNT_OPTIONS="defaults,noatime,discard=async"
-            mount -o "$MOUNT_OPTIONS" "$ROOT_PARTITION" /mnt
+            mount -o "$MOUNT_OPTIONS" "$ROOT_PARTITION" /mnt || return 1
             mkdir -p /mnt/boot/efi
             ;;
     esac
+    return 0
 }
 
 mount_efi_partition() {
@@ -449,32 +534,43 @@ mount_essential_filesystems() {
     # Create essential mount points
     mkdir -p /mnt/{dev,proc,sys,run}
     
-    # Mount essential filesystems
-    mount --bind /dev /mnt/dev || {
-        log_progress "Failed to mount /dev"
-        return 1
-    }
-    mount --bind /dev/pts /mnt/dev/pts || {
-        log_progress "Failed to mount /dev/pts"
-        return 1
-    }
-    mount -t proc proc /mnt/proc || {
-        log_progress "Failed to mount /proc"
-        return 1
-    }
-    mount -t sysfs sys /mnt/sys || {
-        log_progress "Failed to mount /sys"
-        return 1
-    }
-    mount -t tmpfs tmpfs /mnt/run || {
-        log_progress "Failed to mount /run"
-        return 1
+    # Function to safely mount
+    safe_mount() {
+        local source=$1
+        local target=$2
+        local type=$3
+        local options=$4
+        
+        if mountpoint -q "$target"; then
+            log_progress "$target is already mounted"
+            return 0
+        fi
+        
+        if [ -n "$type" ]; then
+            mount -t "$type" $source "$target" ${options:+-o "$options"} || {
+                log_progress "Failed to mount $target"
+                return 1
+            }
+        else
+            mount --bind "$source" "$target" || {
+                log_progress "Failed to mount $target"
+                return 1
+            }
+        fi
+        
+        log_progress "Successfully mounted $target"
+        return 0
     }
     
+    # Mount essential filesystems with checks
+    safe_mount /dev /mnt/dev || return 1
+    safe_mount /dev/pts /mnt/dev/pts || return 1
+    safe_mount proc /mnt/proc proc || return 1
+    safe_mount sys /mnt/sys sysfs || return 1
+    safe_mount tmpfs /mnt/run tmpfs "mode=0755" || return 1
+    
     # Create additional required directories
-    mkdir -p /mnt/run/systemd
-    mkdir -p /mnt/run/dbus
-    mkdir -p /mnt/run/udev
+    mkdir -p /mnt/run/{systemd,dbus,udev}
     
     log_progress "Essential filesystems mounted successfully"
     return 0
@@ -484,8 +580,32 @@ mount_essential_filesystems() {
 install_base_system() {
     log_progress "Installing base system..."
     
-    # Install base system using debootstrap
-    debootstrap --arch amd64 $UBUNTU_VERSION /mnt http://archive.ubuntu.com/ubuntu/
+    # Try debootstrap up to 3 times
+    local max_attempts=3
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        log_progress "Debootstrap attempt $attempt of $max_attempts..."
+        if debootstrap --arch amd64 $UBUNTU_VERSION /mnt http://archive.ubuntu.com/ubuntu/; then
+            log_progress "Debootstrap completed successfully"
+            break
+        else
+            log_progress "Debootstrap attempt $attempt failed"
+            if [ $attempt -eq $max_attempts ]; then
+                log_progress "All debootstrap attempts failed"
+                exit 1
+            fi
+            # Clean up any partial installation before retrying
+            rm -rf /mnt/var/cache/apt/* /mnt/var/lib/apt/lists/* /mnt/debootstrap
+            attempt=$((attempt + 1))
+        fi
+    done
+    
+    # Mount essential filesystems before proceeding
+    mount_essential_filesystems || {
+        log_progress "Failed to mount essential filesystems"
+        exit 1
+    }
     
     # Configure package sources
     log_progress "Configuring package sources..."
@@ -702,6 +822,9 @@ cleanup_and_finish() {
 prepare_mount_points() {
     log_progress "Preparing mount points..."
     
+    # Force cleanup before starting
+    force_cleanup
+    
     # Mount and format root partition based on filesystem type
     if [[ "$FORMAT_PARTITION" =~ ^[Yy]$ ]]; then
         format_root_partition
@@ -713,9 +836,23 @@ prepare_mount_points() {
         exit 1
     }
     
+    # Verify root mount
+    verify_mount "/mnt" "$ROOT_PARTITION" || {
+        log_progress "Root partition mount verification failed"
+        force_cleanup
+        exit 1
+    }
+    
     # Mount EFI partition and handle backups
     mount_efi_partition || {
         log_progress "Failed to mount EFI partition"
+        exit 1
+    }
+    
+    # Verify EFI mount
+    verify_mount "/mnt/boot/efi" "$EFI_PARTITION" || {
+        log_progress "EFI partition mount verification failed"
+        force_cleanup
         exit 1
     }
     
@@ -724,6 +861,15 @@ prepare_mount_points() {
         log_progress "Failed to mount essential filesystems"
         exit 1
     }
+    
+    # Verify essential mounts
+    for mp in "/mnt/dev" "/mnt/proc" "/mnt/sys" "/mnt/run"; do
+        verify_mount "$mp" || {
+            log_progress "Essential filesystem mount verification failed for $mp"
+            force_cleanup
+            exit 1
+        }
+    done
 }
 
 # Main Installation Section

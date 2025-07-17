@@ -1,4 +1,8 @@
 #!/bin/bash
+# Ubuntu Bootstrap Installation Script for Intel RST RAID
+# Author: Kim Asplund
+# Contributors: sergey-derugo (troubleshooting improvements)
+# Repository: https://github.com/kimasplund/Ubuntu_Intel_RST_Install
 
 # Configuration - MODIFY THESE AS NEEDED
 ROOT_PARTITION="/dev/md126p7"     # Your root partition
@@ -101,6 +105,7 @@ cleanup_previous_mounts() {
     
     # Define mount points in reverse order of mounting
     local MOUNT_POINTS=(
+        "/mnt/sys/firmware/efi/efivars"
         "/mnt/dev/pts"
         "/mnt/dev"
         "/mnt/proc"
@@ -197,6 +202,15 @@ check_safety() {
     if [ "$EUID" -ne 0 ]; then 
         echo "Please run as root"
         exit 1
+    fi
+    
+    # Warning about NVMe firmware
+    if [[ $ROOT_PARTITION == "/dev/md"* ]] || [[ $ROOT_PARTITION == "/dev/nvme"* ]]; then
+        echo "================================================================"
+        echo "IMPORTANT: If Ubuntu doesn't see your NVMe storage devices,"
+        echo "you may need to update your NVMe firmware to the latest version."
+        echo "================================================================"
+        echo
     fi
     
     # Detect EFI partition before checking mounts
@@ -618,6 +632,14 @@ mount_essential_filesystems() {
     safe_mount sys /mnt/sys sysfs || return 1
     safe_mount tmpfs /mnt/run tmpfs "mode=0755" || return 1
     
+    # Mount EFI variables if available (for GRUB installation)
+    if [ -d /sys/firmware/efi/efivars ]; then
+        mkdir -p /mnt/sys/firmware/efi/efivars
+        safe_mount efivarfs /mnt/sys/firmware/efi/efivars efivarfs || {
+            log_progress "Warning: Could not mount EFI variables, GRUB installation might have issues"
+        }
+    fi
+    
     # Create additional required directories
     mkdir -p /mnt/run/{systemd,dbus,udev}
     
@@ -628,6 +650,19 @@ mount_essential_filesystems() {
 # Installation Functions
 install_base_system() {
     log_progress "Installing base system..."
+    
+    # Check if debootstrap is installed
+    if ! command -v debootstrap &> /dev/null; then
+        log_progress "debootstrap not found. Installing..."
+        apt-get update || {
+            log_progress "Failed to update package lists"
+            exit 1
+        }
+        apt-get install -y debootstrap || {
+            log_progress "Failed to install debootstrap"
+            exit 1
+        }
+    fi
     
     # Try debootstrap up to 3 times
     local max_attempts=3
@@ -936,6 +971,13 @@ cleanup_and_finish() {
     echo "- Display settings"
     echo "- Network settings"
     echo "- Other system preferences"
+    echo
+    echo "Important post-installation recommendations:"
+    echo "- If you encounter 'shim_lock protocol not found' error, disable Secure Boot in BIOS"
+    echo "- If dual-booting with Windows and WiFi doesn't work, disable Fast Startup in Windows"
+    echo "- To fix time sync issues: sudo timedatectl set-local-rtc 1 --adjust-system-clock"
+    echo "- To install App Center: sudo snap install --edge snap-store"
+    echo "- To install a web browser: sudo apt-get install chromium-browser"
 }
 
 # Mounting Section

@@ -1,0 +1,4 @@
+# MCP and Claude configuration
+.mcp/
+.claude/
+CLAUDE.md
